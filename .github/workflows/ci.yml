@@ -1,0 +1,123 @@
+name: Lab CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tx04v2-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: YAML, launchers and observability
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned validators on the hosted runner
+        run: pip install "yamllint==1.37.1" "PyYAML==6.0.3"
+      - run: yamllint -c .yamllint.yaml .
+      - name: Check shell syntax and launcher safety
+        run: |
+          set -euo pipefail
+          while IFS= read -r script; do bash -n "$script"; done < <(git ls-files '*.sh')
+          bash tests/launcher-contract.sh
+      - name: Check PowerShell syntax
+        shell: pwsh
+        run: |
+          $parseErrors = $null
+          $tokens = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD/lab.ps1", [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) { $parseErrors | Format-List; exit 1 }
+      - name: Validate documentation, dashboards and synthetic rule fixtures
+        run: python scripts/check-lab.py
+      - name: Validate PromQL and alert transitions
+        run: |
+          docker run --rm --network none --entrypoint=/bin/promtool \
+            -v "$PWD/.ci-generated:/fixtures:ro" prom/prometheus:v3.13.2 \
+            check rules /fixtures/rules.yaml /fixtures/dashboard-rules.yaml
+          docker run --rm --network none --entrypoint=/bin/promtool \
+            -v "$PWD/.ci-generated:/fixtures:ro" -w /fixtures prom/prometheus:v3.13.2 \
+            test rules /fixtures/rule-tests.yaml
+
+  manifests:
+    name: Kubernetes manifests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install pinned kubeconform on the hosted runner
+        run: |
+          set -euo pipefail
+          KCV=v0.6.7
+          curl --fail --silent --show-error --location -o /tmp/kubeconform-linux-amd64.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KCV}/kubeconform-linux-amd64.tar.gz"
+          curl --fail --silent --show-error --location -o /tmp/kubeconform-CHECKSUMS \
+            "https://github.com/yannh/kubeconform/releases/download/${KCV}/CHECKSUMS"
+          (cd /tmp && grep '  kubeconform-linux-amd64.tar.gz$' kubeconform-CHECKSUMS | sha256sum --check --strict)
+          tar -xzf /tmp/kubeconform-linux-amd64.tar.gz -C /tmp kubeconform
+      - name: Validate against the kind Kubernetes version
+        run: |
+          /tmp/kubeconform -strict -ignore-missing-schemas -kubernetes-version 1.31.2 \
+            -ignore-filename-pattern '.*values.*\.yaml' \
+            -ignore-filename-pattern '.*kind-cluster.*\.yaml' \
+            -ignore-filename-pattern '.*/kwok/.*' \
+            -summary clusters/ platform/ scenarios/
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Verify and run pinned Gitleaks
+        run: |
+          set -euo pipefail
+          version=8.30.0
+          archive="gitleaks_${version}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${version}"
+          curl --fail --silent --show-error --location "$base/$archive" -o "/tmp/$archive"
+          curl --fail --silent --show-error --location "$base/gitleaks_${version}_checksums.txt" -o /tmp/gitleaks-checksums.txt
+          (cd /tmp && grep "  $archive\$" gitleaks-checksums.txt | sha256sum --check --strict)
+          tar -xzf "/tmp/$archive" -C /tmp gitleaks
+          /tmp/gitleaks git --redact --no-banner --log-opts=--all .
+          /tmp/gitleaks dir --redact --no-banner .
+
+  smoke:
+    name: Disposable kind and mock serving
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build toolbox and start the lab on this disposable runner
+        run: |
+          ./lab.sh build
+          ./lab.sh up
+          ./lab.sh serving
+          ./lab.sh kubectl -n serving rollout status deployment/mock-llm --timeout=180s
+      - name: Check mock health, request handling and metrics
+        run: |
+          ./lab.sh kubectl -n serving exec deployment/mock-llm -- python -c '
+          import urllib.request
+          def get(path):
+              return urllib.request.urlopen("http://127.0.0.1:8080" + path, timeout=5).read().decode()
+          assert get("/healthz") == "ok"
+          assert "hello from mock-llm" in get("/generate")
+          assert "llm_requests_total 1" in get("/metrics")
+          '
+      - name: Delete only this runner's lab cluster
+        if: always()
+        run: TX04V2_ACK_DELETE_CLUSTER=tx04v2 ./lab.sh down

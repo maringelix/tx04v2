@@ -1,0 +1,23 @@
+# ---------------------------------------------------------------------------
+# servicemonitor.yaml — tell the Prometheus Operator to scrape mock-llm /metrics.
+#
+# The  release: kube-prom  label is REQUIRED: kube-prometheus-stack (installed as
+# release "kube-prom") only selects ServiceMonitors carrying it. Without the
+# label the operator ignores this object and no scraping happens — a classic
+# "my metrics aren't showing up" gotcha.
+# ---------------------------------------------------------------------------
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mock-llm
+  namespace: serving
+  labels:
+    release: kube-prom
+spec:
+  selector:
+    matchLabels:
+      app: mock-llm
+  endpoints:
+    - port: http          # the Service port NAME (not number)
+      path: /metrics
+      interval: 15s

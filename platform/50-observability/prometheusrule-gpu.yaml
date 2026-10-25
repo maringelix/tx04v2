@@ -1,0 +1,99 @@
+# ---------------------------------------------------------------------------
+# prometheusrule-gpu.yaml — alerts that map directly to the failure scenarios.
+#
+# label  release: kube-prom  is required for the operator to load these rules.
+# View firing alerts in Prometheus UI -> Alerts (Alertmanager is disabled in the
+# slim profile, so nothing is routed — that's fine for the lab).
+#
+# The headline alert is GPUVRAMNearExhaustion: it catches the CUDA-OOM that
+# Kubernetes itself is blind to (scenarios/b-vram-oom), using DCGM framebuffer
+# metrics rather than the (useless-for-VRAM) cgroup memory signal.
+# ---------------------------------------------------------------------------
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: tx04v2-gpu-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prom
+spec:
+  groups:
+    - name: gpu.rules
+      rules:
+        - alert: GPUVRAMNearExhaustion
+          expr: DCGM_FI_DEV_FB_USED / (DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE) > 0.9
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "GPU {{ $labels.gpu }} VRAM > 90% on {{ $labels.Hostname }}"
+            description: >-
+              Framebuffer nearly full. A CUDA out-of-memory here crashes the
+              process (exit 1 / CrashLoopBackOff) WITHOUT an OOMKilled event —
+              Kubernetes cannot see it. Reduce batch size / enable activation
+              checkpointing / use MIG to bound VRAM. See scenarios/b-vram-oom.
+
+        - alert: GPUUnderUtilized
+          expr: avg by (Hostname, gpu) (DCGM_FI_DEV_GPU_UTIL) < 10
+          for: 20m
+          labels:
+            severity: info
+          annotations:
+            summary: "GPU {{ $labels.gpu }} < 10% utilized for 20m ({{ $labels.Hostname }})"
+            description: >-
+              An idle/allocated GPU is wasted spend. Check for data/IO starvation
+              (dataloader, storage, network) vs a stuck job. Cross-check
+              DCGM_FI_PROF_PIPE_TENSOR_ACTIVE to see if tensor cores are used.
+
+        - alert: GPUXidErrors
+          expr: increase(DCGM_FI_DEV_XID_ERRORS[10m]) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "GPU XID error on {{ $labels.Hostname }} gpu {{ $labels.gpu }}"
+            description: "XID errors indicate driver/hardware faults (ECC, fallen-off-bus). Cordon and investigate the node."
+
+    - name: platform.rules
+      rules:
+        - alert: NodeConntrackNearLimit
+          expr: node_nf_conntrack_entries / node_nf_conntrack_entries_limit > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "conntrack table > 80% on {{ $labels.instance }}"
+            description: >-
+              Approaching nf_conntrack_max -> "table full, dropping packet".
+              Raise the limit / shorten timeouts (platform/40-networking/
+              conntrack-tuning.yaml). See scenarios/c-dns-conntrack.
+
+        - alert: CoreDNSHighFailureRate
+          expr: sum(rate(coredns_dns_responses_total{rcode="SERVFAIL"}[5m])) > 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "CoreDNS SERVFAIL rate elevated"
+            description: >-
+              DNS failures cluster-wide. Likely ndots amplification / CoreDNS
+              saturation under a distributed job. Deploy NodeLocal DNSCache and
+              tune ndots. See scenarios/c-dns-conntrack.
+
+        - alert: PodImagePullBackOff
+          expr: sum by (namespace, pod) (kube_pod_container_status_waiting_reason{reason="ImagePullBackOff"}) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ImagePullBackOff: {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "Often multi-GB ML/CUDA images timing out or filling disk. See scenarios/a-image-storage."
+
+        - alert: NodeDiskPressure
+          expr: kube_node_status_condition{condition="DiskPressure",status="true"} == 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "DiskPressure on {{ $labels.node }}"
+            description: "Node evicting pods due to disk. Large image layers / ephemeral storage. See scenarios/a-image-storage."

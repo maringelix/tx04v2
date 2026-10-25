@@ -1,0 +1,67 @@
+# ---------------------------------------------------------------------------
+# deadlock-demo.yaml — what happens WITHOUT gang scheduling (the anti-pattern).
+#
+# Two "jobs" (plain Deployments on the DEFAULT scheduler), each wanting 6 GPUs,
+# on a node with only 8. The default scheduler places pods one at a time with no
+# notion of the group, so it typically ends up ~4 + ~4: NEITHER job reaches its
+# required 6, yet both HOLD GPUs. Result: 8 GPUs are 100% allocated and 0 useful
+# work happens — classic resource-fragmentation deadlock.
+#
+#   kubectl apply -f platform/20-scheduling/deadlock-demo.yaml
+#   kubectl get pods -n ml-jobs -l demo=deadlock -o wide
+#   # observe: neither job-a nor job-b has 6 Running; some pods Pending.
+#
+# The fix is exactly gang-training-job.yaml: make each job atomic so it either
+# gets all 6 or waits, freeing GPUs for the other to complete, then swap.
+#
+# Cleanup: kubectl delete -f platform/20-scheduling/deadlock-demo.yaml
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-a
+  namespace: ml-jobs
+  labels:
+    demo: deadlock
+spec:
+  replicas: 6
+  selector:
+    matchLabels: { app: job-a, demo: deadlock }
+  template:
+    metadata:
+      labels: { app: job-a, demo: deadlock }
+    spec:
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      containers:
+        - name: c
+          image: busybox:1.37
+          command: ["sh", "-c", "sleep 100000"]
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-b
+  namespace: ml-jobs
+  labels:
+    demo: deadlock
+spec:
+  replicas: 6
+  selector:
+    matchLabels: { app: job-b, demo: deadlock }
+  template:
+    metadata:
+      labels: { app: job-b, demo: deadlock }
+    spec:
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      containers:
+        - name: c
+          image: busybox:1.37
+          command: ["sh", "-c", "sleep 100000"]
+          resources:
+            limits:
+              nvidia.com/gpu: "1"

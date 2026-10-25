@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------------------
+# prometheus-adapter values — expose llm_requests_inflight to the HPA.
+#
+# The HPA cannot read Prometheus directly. prometheus-adapter implements the
+# custom.metrics.k8s.io aggregated API and translates a PromQL query into a
+# metric the HPA can consume, keyed by pod/namespace.
+#
+# Install:
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm upgrade --install prom-adapter prometheus-community/prometheus-adapter \
+#     -n monitoring -f platform/30-serving/prometheus-adapter-values.yaml
+#
+# The prometheus URL below matches kube-prometheus-stack installed as release
+# "kube-prom" in ns monitoring. The Service is kube-prom-prometheus — verified
+# against the live cluster on 2026-08-06. It was previously written as
+# kube-prom-kube-prometheus-prometheus, which does not resolve: the adapter
+# would come up, fail every query, and the HPA custom metric
+# (llm_requests_inflight) would never resolve — an autoscaler that silently
+# never scales.
+# ---------------------------------------------------------------------------
+prometheus:
+  url: http://kube-prom-prometheus.monitoring.svc
+  port: 9090
+
+rules:
+  default: false
+  custom:
+    - seriesQuery: 'llm_requests_inflight{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace:
+            resource: namespace
+          pod:
+            resource: pod
+      name:
+        matches: "^(.*)$"
+        as: "${1}"
+      # Average the gauge per pod so the HPA sees a per-replica concurrency value.
+      metricsQuery: 'avg(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'

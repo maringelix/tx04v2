@@ -1,0 +1,67 @@
+# ---------------------------------------------------------------------------
+# kube-prometheus-stack values — SLIM profile for an ~8 GB lab.
+#
+# Trims retention + resources and disables control-plane scrape jobs that kind
+# doesn't expose (so you don't get a wall of "target down"). Alertmanager is off
+# to save memory — PrometheusRules still evaluate and you can see alerts firing
+# in the Prometheus UI (Status -> Rules / Alerts). This profile has no external
+# notification delivery configured.
+#
+# The DEFAULT selector behavior is kept ON PURPOSE: the operator only selects
+# ServiceMonitors/PrometheusRules carrying  release: kube-prom . Every module in
+# this lab labels its objects that way; it's a real-world gotcha worth knowing.
+# ---------------------------------------------------------------------------
+fullnameOverride: kube-prom
+
+alertmanager:
+  enabled: false
+
+grafana:
+  enabled: true
+  adminPassword: admin        # LAB ONLY — do not do this anywhere real
+  defaultDashboardsEnabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      # look for dashboard ConfigMaps in all namespaces
+      searchNamespace: ALL
+
+prometheus:
+  prometheusSpec:
+    retention: 6h
+    scrapeInterval: 30s
+    resources:
+      requests:
+        cpu: 150m
+        memory: 512Mi
+      limits:
+        memory: 1Gi
+    # Keep the release-label selectors (do NOT set *NilUsesHelmValues: false),
+    # so objects must carry release: kube-prom to be picked up.
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+
+# kind doesn't expose these on scrapable endpoints; disable to avoid noise.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false

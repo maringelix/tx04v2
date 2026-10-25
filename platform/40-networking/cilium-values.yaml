@@ -1,0 +1,48 @@
+# ---------------------------------------------------------------------------
+# cilium-values.yaml — Cilium (eBPF) for the kind CILIUM cluster variant.
+#
+# Pairs with clusters/kind/kind-cluster-cilium.yaml (no default CNI, no
+# kube-proxy). install.sh injects k8sServiceHost/Port (the kind control-plane
+# container IP) because with kube-proxy replacement there is no kube-proxy to
+# reach the API server through — Cilium must be told where it is.
+#
+# kubeProxyReplacement: true  -> Cilium implements ClusterIP/NodePort/LB Service
+# load-balancing in eBPF at the socket/tc layer, replacing iptables/ipvs. This is
+# the "why eBPF for AI" story: O(1) eBPF map lookups instead of walking long
+# iptables chains on every packet during high pod-to-pod fan-out (AllReduce).
+# ---------------------------------------------------------------------------
+kubeProxyReplacement: true
+
+# kind runs on a single Docker bridge; kubernetes IPAM is simplest and matches
+# the podSubnet in the kind config.
+ipam:
+  mode: kubernetes
+
+# eBPF-based masquerading (no iptables masquerade rules).
+bpf:
+  masquerade: true
+
+operator:
+  replicas: 1        # single-node-ish lab; one operator is enough
+
+# Hubble = flow visibility (the "tcpdump for Kubernetes"): see L3/L4/L7 flows,
+# drops, DNS. Invaluable for the networking-troubleshooting story.
+hubble:
+  enabled: true
+  relay:
+    enabled: true
+  ui:
+    enabled: true    # set false to save ~150 MB on a tight laptop
+  metrics:
+    enabled:
+      - dns:query;ignoreAAAA
+      - drop
+      - tcp
+      - flow
+      - port-distribution
+
+# Keep resource use modest for the lab.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi

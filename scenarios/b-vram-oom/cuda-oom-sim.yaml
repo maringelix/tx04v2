@@ -1,0 +1,110 @@
+# =============================================================================
+# cuda-oom-sim.yaml — SIMULATED GPU VRAM out-of-memory (CUDA OOM)
+# -----------------------------------------------------------------------------
+# WHAT THIS DEMONSTRATES
+#   A process that exhausts GPU framebuffer (VRAM) does NOT get killed by the
+#   Linux kernel. CUDA allocations fail INSIDE the process: cudaMalloc returns
+#   cudaErrorMemoryAllocation, the CUDA/runtime (or PyTorch) raises
+#   "RuntimeError: CUDA out of memory ...", the python interpreter exits 1, and
+#   the container restarts -> CrashLoopBackOff.
+#
+# WHY IT'S K8S-INVISIBLE
+#   The kubelet/cgroup memory controller only accounts HOST RAM (anonymous +
+#   page cache of the container cgroup). GPU VRAM lives on the device, behind
+#   the driver; there is NO cgroup controller for it, so the OOM killer never
+#   fires, lastState.terminated.reason is NEVER "OOMKilled", and exit code is
+#   1 (app error) not 137 (128 + SIGKILL). To the operator the pod just
+#   "crashes"; host-RAM dashboards stay green.
+#
+# THIS IS A PURE-CPU SIMULATION
+#   No GPU, no CUDA, no nvidia.com/gpu request. A busybox shell prints the
+#   *canonical* PyTorch CUDA-OOM traceback to stdout and exits 1, reproducing
+#   EXACTLY what the operator sees in `kubectl logs` and in pod status. The
+#   teaching value is the SIGNAL SHAPE (exit 1, no OOMKilled, must read logs),
+#   which is identical to the real failure.
+#
+# CONTRAST WITH host-oom.yaml
+#   host-oom.yaml allocates HOST RAM past its limit -> real cgroup OOM ->
+#   reason=OOMKilled, exitCode=137. Run both, compare pod status.
+#
+# NAMESPACE: ml-jobs (training/distributed jobs), per lab convention.
+# =============================================================================
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ml-jobs
+  labels:
+    app.kubernetes.io/part-of: tx04v2-lab
+    tx04v2.scenario: b-vram-oom
+---
+# ConfigMap holding the simulation script. Mounted read-only into the pod so the
+# image stays a stock busybox (no custom build, no registry push). The script
+# emits the byte-for-byte PyTorch CUDA-OOM message an SRE would grep for.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cuda-oom-sim-script
+  namespace: ml-jobs
+  labels:
+    app.kubernetes.io/part-of: tx04v2-lab
+    tx04v2.scenario: b-vram-oom
+data:
+  run.sh: |
+    #!/bin/sh
+    # Simulate a training step that tries to allocate a tensor larger than the
+    # remaining free VRAM. In a real run this is torch.cuda / cudaMalloc failing.
+    set -eu
+    echo "[trainer] starting epoch=0 step=0 model=llama-7b dtype=fp16"
+    echo "[trainer] device=cuda:0 name='NVIDIA A100-SXM4-40GB' total_vram=40536MiB"
+    echo "[trainer] allocating activations for batch_size=32 seq_len=4096 ..."
+    sleep 3
+    # ---- canonical PyTorch CUDA OOM traceback (what you grep for) -----------
+    echo "Traceback (most recent call last):" >&2
+    echo "  File \"/workspace/train.py\", line 212, in <module>" >&2
+    echo "    loss = model(batch).loss" >&2
+    echo "  File \"/usr/lib/python3.11/site-packages/torch/nn/modules/module.py\", line 1518, in _call_impl" >&2
+    echo "    return forward_call(*args, **kwargs)" >&2
+    echo "torch.cuda.OutOfMemoryError: CUDA out of memory. Tried to allocate 3.50 GiB (GPU 0; 40.00 GiB total capacity; 38.12 GiB already allocated; 1.43 GiB free; 38.40 GiB reserved in total by PyTorch) If reserved memory is >> allocated memory try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF" >&2
+    # Exit 1 == ordinary application error. NOT 137. This is the whole point:
+    # the kernel did not kill us; our own process aborted on a failed cudaMalloc.
+    exit 1
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cuda-oom-sim
+  namespace: ml-jobs
+  labels:
+    app.kubernetes.io/part-of: tx04v2-lab
+    tx04v2.scenario: b-vram-oom
+    failure-mode: cuda-vram-oom
+spec:
+  # restartPolicy Always => kubelet keeps restarting the exited container,
+  # backing off (10s,20s,40s...,max 5m) => CrashLoopBackOff. This is the state
+  # the on-call sees in `kubectl get pods`.
+  restartPolicy: Always
+  containers:
+    - name: trainer
+      image: busybox:1.37
+      command: ["/bin/sh", "/scripts/run.sh"]
+      # NOTE: deliberately NO nvidia.com/gpu request and NO high memory usage.
+      # We are reproducing the SIGNAL, not consuming a real device. The host-RAM
+      # limit here is generous precisely so we DON'T accidentally trip a real
+      # cgroup OOM and muddy the contrast with host-oom.yaml.
+      resources:
+        requests:
+          cpu: "10m"
+          memory: "16Mi"
+        limits:
+          cpu: "100m"
+          memory: "64Mi"
+      volumeMounts:
+        - name: script
+          mountPath: /scripts
+          readOnly: true
+  volumes:
+    - name: script
+      configMap:
+        name: cuda-oom-sim-script
+        defaultMode: 0555

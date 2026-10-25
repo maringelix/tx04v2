@@ -1,0 +1,30 @@
+# ---------------------------------------------------------------------------
+# huge-image.yaml — reproduce ImagePullBackOff without downloading 15 GB.
+#
+# Real cause in production: PyTorch/CUDA/model images are 5-15 GB; on a cold node
+# the pull times out or races other pulls, and the pod loops ErrImagePull ->
+# ImagePullBackOff. Here we use a NONEXISTENT tag so the pull fails immediately
+# and you can study the SAME state + backoff timing without the bandwidth.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scenario-a
+  labels:
+    app.kubernetes.io/part-of: tx04v2-lab
+    tx04v2.scenario: a-image-storage
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: huge-image
+  namespace: scenario-a
+  labels:
+    tx04v2.scenario: a-image-storage
+spec:
+  restartPolicy: Always
+  containers:
+    - name: model
+      # Nonexistent tag -> ErrImagePull -> ImagePullBackOff (exponential backoff).
+      image: registry.k8s.io/pause:this-tag-does-not-exist-999
+      imagePullPolicy: Always

@@ -1,0 +1,51 @@
+# ---------------------------------------------------------------------------
+# sample-gpu-pod.yaml — two teaching pods for extended-resource scheduling.
+#
+#   gpu-smoke   : requests 1 GPU -> scheduled onto the fake GPU node. Exec in and
+#                 run the injected fake `nvidia-smi` to "see" the GPU.
+#   gpu-too-big : requests 100 GPUs -> stays Pending forever with
+#                 "Insufficient nvidia.com/gpu". This is the hard capacity gate.
+#
+# Key facts about GPUs as a Kubernetes resource:
+#   * nvidia.com/gpu is an EXTENDED RESOURCE: integer only, no millicores, and
+#     requests MUST equal limits (you cannot overcommit a GPU like CPU).
+#   * The scheduler treats it as a normal resource in Filter/Score; the kubelet
+#     device-plugin performs Allocate and pins the device into the container.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-smoke
+  labels:
+    app.kubernetes.io/part-of: tx04v2-lab
+    tx04v2.module: 10-gpu
+spec:
+  restartPolicy: Never
+  # Land on the simulated GPU node. The resource request alone would do it, but
+  # the nodeSelector makes intent explicit and documents the pool convention.
+  nodeSelector:
+    nvidia.com/gpu.present: "true"
+  containers:
+    - name: cuda
+      image: busybox:1.37
+      command: ["sh", "-c", "echo 'GPU pod running; try: kubectl exec -it gpu-smoke -- nvidia-smi'; sleep 3600"]
+      resources:
+        limits:
+          nvidia.com/gpu: "1"   # requests are auto-set equal to limits for GPUs
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-too-big
+  labels:
+    app.kubernetes.io/part-of: tx04v2-lab
+    tx04v2.module: 10-gpu
+spec:
+  restartPolicy: Never
+  containers:
+    - name: greedy
+      image: busybox:1.37
+      command: ["sh", "-c", "sleep 3600"]
+      resources:
+        limits:
+          nvidia.com/gpu: "100"   # exceeds the 8 fake GPUs -> Pending

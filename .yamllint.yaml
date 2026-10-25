@@ -1,0 +1,23 @@
+# Relaxed yamllint tuned for Kubernetes manifests and Helm values files.
+# Helm templates and very long image refs / annotations are common, so we
+# disable line-length and document-start and relax indentation/comments.
+extends: relaxed
+
+rules:
+  line-length: disable
+  document-start: disable
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
+  truthy:
+    allowed-values: ["true", "false", "on", "off"]
+    check-keys: false
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+    check-multi-line-strings: false
+
+ignore: |
+  charts/
+  rendered/
+  **/*.tgz

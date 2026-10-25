@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------------------
+# disk-pressure.yaml — reproduce an ephemeral-storage eviction safely.
+#
+# Real cause: a container writes datasets/checkpoints/huge image layers to the
+# node filesystem; the node crosses the kubelet's eviction threshold and enters
+# DiskPressure, evicting pods. Filling a real node's disk is destructive, so we
+# scope it to ONE pod via an ephemeral-storage LIMIT: the container writes past
+# its 100Mi limit and the kubelet evicts just this pod (reason: Evicted,
+# "ephemeral local storage usage exceeds the total limit"). Same mechanism,
+# node-safe.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Pod
+metadata:
+  name: disk-hog
+  namespace: scenario-a
+  labels:
+    tx04v2.scenario: a-image-storage
+spec:
+  restartPolicy: Never
+  containers:
+    - name: hog
+      image: busybox:1.37
+      command:
+        - sh
+        - -c
+        - "echo writing 500MiB to emptyDir...; dd if=/dev/zero of=/data/blob bs=1M count=500; echo done; sleep 600"
+      resources:
+        requests:
+          ephemeral-storage: "50Mi"
+        limits:
+          ephemeral-storage: "100Mi"   # < 500MiB write -> evicted
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      emptyDir:
+        sizeLimit: 100Mi

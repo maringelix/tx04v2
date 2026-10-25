@@ -1,0 +1,35 @@
+# ---------------------------------------------------------------------------
+# host-oom.yaml — the CONTRAST case: a REAL host-RAM OOMKill (exit 137).
+#
+# This pod allocates 256 MiB of anonymous memory with a 128 MiB cgroup limit.
+# The Linux kernel's cgroup memory controller kills it -> the kubelet reports
+#   lastState.terminated.reason = OOMKilled, exitCode = 137 (128 + SIGKILL(9)).
+# K8s SEES this: dashboards light up, kube_pod_container_status_last_terminated_
+# reason="OOMKilled" fires.
+#
+# Compare with cuda-oom-sim.yaml (GPU VRAM OOM): exit 1, NO OOMKilled, K8s blind.
+# Run both, then diff their pod status — that contrast is the whole lesson.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Pod
+metadata:
+  name: host-oom
+  namespace: ml-jobs
+  labels:
+    app.kubernetes.io/part-of: tx04v2-lab
+    tx04v2.scenario: b-vram-oom
+    failure-mode: host-ram-oom
+spec:
+  restartPolicy: Always
+  containers:
+    - name: hog
+      image: polinux/stress:latest
+      command: ["stress"]
+      args: ["--vm", "1", "--vm-bytes", "256M", "--vm-hang", "0"]
+      resources:
+        requests:
+          memory: 64Mi
+          cpu: 50m
+        limits:
+          memory: 128Mi   # < 256M allocation -> cgroup OOM -> OOMKilled / 137
+          cpu: 200m

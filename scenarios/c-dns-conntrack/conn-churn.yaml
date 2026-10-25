@@ -1,0 +1,37 @@
+# ---------------------------------------------------------------------------
+# conn-churn.yaml — fill the conntrack table with short-lived connections.
+#
+# 20 pods each open a fresh TCP connection as fast as they can. Every new flow =
+# one conntrack entry that lingers in TIME_WAIT. This mimics Ray/PyTorch workers
+# opening thousands of connections during rendezvous/AllReduce. Watch
+# nf_conntrack_count climb toward nf_conntrack_max; past the limit the kernel
+# drops packets ("nf_conntrack: table full") and the app sees random timeouts.
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conn-churn
+  namespace: scenario-c
+  labels:
+    tx04v2.scenario: c-dns-conntrack
+spec:
+  replicas: 20
+  selector:
+    matchLabels:
+      app: conn-churn
+  template:
+    metadata:
+      labels:
+        app: conn-churn
+    spec:
+      containers:
+        - name: churn
+          image: busybox:1.37
+          # New connection every iteration (no keep-alive) -> lots of conntrack churn.
+          command:
+            - sh
+            - -c
+            - "while true; do wget -q -T 2 -O /dev/null http://mock-llm.serving.svc.cluster.local/ 2>/dev/null || true; done"
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 32Mi }

@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# tx04v2 kind cluster — CILIUM variant (eBPF datapath, kube-proxy replacement).
+#
+# Use this ONLY when exercising platform/40-networking. Two critical diffs vs
+# the default cluster:
+#   * disableDefaultCNI: true  -> kindnet is NOT installed; pods stay Pending /
+#     NotReady until you install Cilium. This is intentional: Cilium owns the
+#     CNI. (Bring up cluster -> install Cilium -> nodes go Ready.)
+#   * kubeProxyMode: none      -> kube-proxy is NOT installed. Cilium replaces
+#     it in eBPF (kubeProxyReplacement=true), so Service/ClusterIP load
+#     balancing and NodePort are handled by eBPF programs on the veth/tc hooks
+#     instead of iptables/ipvs. This is the "why eBPF for AI" story: no linear
+#     iptables chain walk per packet on high pod-to-pod fan-out (AllReduce).
+#
+# After creating this cluster:  bash platform/40-networking/install.sh
+# ---------------------------------------------------------------------------
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: tx04v2
+networking:
+  disableDefaultCNI: true
+  kubeProxyMode: none
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/16"
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.31.2
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+  - role: worker
+    image: kindest/node:v1.31.2
+    labels:
+      nvidia.com/gpu.present: "true"
+      node.tx04v2.io/pool: "gpu"
+      run.ai/simulated-gpu-node-pool: "default"
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "nvidia.com/gpu.present=true,node.tx04v2.io/pool=gpu,run.ai/simulated-gpu-node-pool=default"
+  - role: worker
+    image: kindest/node:v1.31.2
+    labels:
+      node.tx04v2.io/pool: "cpu"
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "node.tx04v2.io/pool=cpu"

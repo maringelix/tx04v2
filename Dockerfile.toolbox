@@ -1,0 +1,25 @@
+FROM alpine:3.22
+
+ARG TARGETARCH
+ARG KIND_VERSION=v0.30.0
+ARG KUBECTL_VERSION=v1.31.2
+ARG HELM_VERSION=v3.16.4
+
+RUN apk add --no-cache bash bc ca-certificates coreutils curl docker-cli grep jq sed tar \
+    && curl -fsSLo /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-${TARGETARCH}" \
+    && curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
+    && curl -fsSLo /tmp/helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" \
+    && tar -xzf /tmp/helm.tar.gz -C /tmp \
+    && mv "/tmp/linux-${TARGETARCH}/helm" /usr/local/bin/helm \
+    && chmod +x /usr/local/bin/kind /usr/local/bin/kubectl /usr/local/bin/helm \
+    && rm -rf /tmp/helm.tar.gz "/tmp/linux-${TARGETARCH}" \
+    && kind version && kubectl version --client=true && helm version --short
+
+ENV KUBECONFIG=/state/kubeconfig \
+    HELM_CACHE_HOME=/state/helm/cache \
+    HELM_CONFIG_HOME=/state/helm/config \
+    HELM_DATA_HOME=/state/helm/data
+
+WORKDIR /workspace
+ENTRYPOINT []
+CMD ["bash"]

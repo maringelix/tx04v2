@@ -1,0 +1,22 @@
+# ---------------------------------------------------------------------------
+# fake-gpu-operator values — simulated GPU topology.
+#
+# The operator advertises the nvidia.com/gpu extended resource and runs a fake
+# dcgm-exporter (emitting DCGM_FI_DEV_* series) on every node labeled
+#   run.ai/simulated-gpu-node-pool=<poolName>
+# The pool name below ("default") MUST match that label value on the node
+# (see clusters/kind/kind-cluster.yaml).
+#
+# We model an 8x A100-40GB node. gpuMemory is in MiB (40536 MiB ~= 40 GB), which
+# matches the VRAM figures used by scenarios/b-vram-oom so the CUDA-OOM story is
+# numerically consistent. Tune gpuCount down if you want to demo Pending faster.
+#
+# If a chart version renames these keys, confirm with:
+#   helm show values oci://ghcr.io/run-ai/fake-gpu-operator/fake-gpu-operator --version 0.1.0
+# ---------------------------------------------------------------------------
+topology:
+  nodePools:
+    default:
+      gpuProduct: NVIDIA-A100-SXM4-40GB
+      gpuCount: 8
+      gpuMemory: 40536

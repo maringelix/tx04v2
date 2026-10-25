@@ -1,0 +1,90 @@
+# ---------------------------------------------------------------------------
+# tx04v2 default kind cluster: 1 control-plane + 2 workers.
+#
+# What kind actually is: each "node" below becomes a Docker CONTAINER running
+# systemd + containerd + the kubelet. The cluster is real Kubernetes (real
+# api-server, scheduler, controller-manager, etcd) wired together by kubeadm
+# inside those containers. The default pod network is kindnet (a tiny CNI).
+# There is no VM and no real GPU here — kind gives us an honest control plane
+# to schedule against, and KWOK (clusters/kwok/) bolts on hundreds of fake
+# nodes for scale tests.
+#
+# Memory budget: this default variant keeps kindnet + kube-proxy so it boots
+# on the ~8 GB Docker VM with zero extra moving parts. Use the -cilium variant
+# only when you are exercising the CNI module.
+#
+# Node image is pinned for reproducibility. v1.31.2 is a real published tag;
+# kind v0.30.0 can run any published node image via this explicit override
+# (kind only *defaults* to a newer image). Override with KIND_NODE_IMAGE.
+# ---------------------------------------------------------------------------
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: tx04v2
+networking:
+  # Explicit pod/service CIDRs so the values match what the Cilium variant and
+  # the observability dashboards assume. kindnet honors these.
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/16"
+nodes:
+  # -------------------------------------------------------------------------
+  # Control plane. We co-locate an ingress-ready label and host port mappings
+  # so an ingress controller (or KServe gateway) can be reached from the host
+  # at http://localhost:80 / :443 without a LoadBalancer.
+  # -------------------------------------------------------------------------
+  - role: control-plane
+    image: kindest/node:v1.31.2
+    kubeadmConfigPatches:
+      # node-labels must be set on the kubelet via the JoinConfiguration/
+      # InitConfiguration registration — labels set any other way are dropped
+      # on kubelet restart. "ingress-ready=true" is the conventional selector
+      # the ingress-nginx kind manifest uses for its nodeSelector.
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+  # -------------------------------------------------------------------------
+  # Worker 1: the simulated GPU node. The fake-gpu-operator (platform module)
+  # keys off nvidia.com/gpu.present=true to decide where to advertise the
+  # nvidia.com/gpu extended resource and emit fake DCGM metrics. No real GPU
+  # or NVIDIA driver is involved — the label is the contract.
+  # -------------------------------------------------------------------------
+  - role: worker
+    image: kindest/node:v1.31.2
+    labels:
+      nvidia.com/gpu.present: "true"
+      node.tx04v2.io/pool: "gpu"
+      # The fake-gpu-operator (platform/10-gpu) only advertises nvidia.com/gpu
+      # and emits fake DCGM metrics on nodes carrying THIS label. Value "default"
+      # must match a key under topology.nodePools in fake-gpu-operator-values.yaml.
+      run.ai/simulated-gpu-node-pool: "default"
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "nvidia.com/gpu.present=true,node.tx04v2.io/pool=gpu,run.ai/simulated-gpu-node-pool=default"
+  # -------------------------------------------------------------------------
+  # Worker 2: a plain CPU node for system/infra workloads (monitoring,
+  # controllers) so the GPU node stays representative of a real GPU pool that
+  # you would taint and keep for accelerated work only.
+  # -------------------------------------------------------------------------
+  - role: worker
+    image: kindest/node:v1.31.2
+    labels:
+      node.tx04v2.io/pool: "cpu"
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "node.tx04v2.io/pool=cpu"

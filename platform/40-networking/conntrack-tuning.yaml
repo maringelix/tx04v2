@@ -1,0 +1,63 @@
+# ---------------------------------------------------------------------------
+# conntrack-tuning.yaml — raise the netfilter conntrack limits on every node.
+#
+# The Linux connection-tracking table (conntrack) has ONE entry per tracked
+# flow. Distributed training (Ray/PyTorch AllReduce) and DNS storms open tens of
+# thousands of short-lived connections; when nf_conntrack_count hits
+# nf_conntrack_max the kernel DROPS packets and logs:
+#     nf_conntrack: table full, dropping packet
+# ...which looks like random network flakiness to the app. This DaemonSet bumps
+# the ceiling and shortens stale-flow timeouts so the table drains faster.
+#
+# Runs privileged on the host network namespace (conntrack is host-wide). This is
+# the "sysctl DaemonSet" pattern; in production you'd bake these into the node
+# image / kubelet systemConfig, or set allowedUnsafeSysctls. Values here are
+# lab-sized; a real GPU node would go much higher.
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: conntrack-tuner
+  namespace: kube-system
+  labels:
+    app: conntrack-tuner
+    app.kubernetes.io/part-of: tx04v2-lab
+spec:
+  selector:
+    matchLabels:
+      app: conntrack-tuner
+  template:
+    metadata:
+      labels:
+        app: conntrack-tuner
+    spec:
+      hostNetwork: true
+      hostPID: true
+      tolerations:
+        - operator: Exists    # run on every node, incl. control-plane
+      containers:
+        - name: tuner
+          image: busybox:1.37
+          securityContext:
+            privileged: true
+          command:
+            - sh
+            - -c
+            - |
+              set -x
+              # Ceiling for tracked connections (default is often ~65k-262k).
+              sysctl -w net.netfilter.nf_conntrack_max=524288 || true
+              # Drain idle/closed flows faster so the table doesn't fill up.
+              sysctl -w net.netfilter.nf_conntrack_tcp_timeout_established=3600 || true
+              sysctl -w net.netfilter.nf_conntrack_tcp_timeout_time_wait=30 || true
+              sysctl -w net.netfilter.nf_conntrack_tcp_timeout_close_wait=30 || true
+              echo "conntrack tuned; current max: $(cat /proc/sys/net/netfilter/nf_conntrack_max)"
+              # Keep the pod alive so the settings persist for the node's life.
+              sleep infinity
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi

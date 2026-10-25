@@ -1,0 +1,61 @@
+# ---------------------------------------------------------------------------
+# scale-workload.yaml — schedule 400 GPU pods onto the KWOK fake fleet.
+#
+# Purpose: demonstrate scheduler behavior AT SCALE. With 100 fake nodes * 8 GPUs
+# = 800 GPUs, 400 single-GPU pods should all reach Running (via kwok's fast
+# Stage) within seconds. Things to observe / talk about in an interview:
+#   * kubectl get pods -n kwok-scale -o wide  -> how pods spread across nodes
+#     (default scheduler scoring: spread + least-allocated). Compare with a
+#     binpack policy (Volcano) that would densely pack GPUs to free whole nodes.
+#   * bump replicas to 900 (> 800 GPUs) -> ~100 pods stuck Pending with
+#     "0/… nodes available: Insufficient nvidia.com/gpu" -> extended-resource
+#     capacity is a hard scheduling gate; this is where Cluster Autoscaler /
+#     Karpenter would add nodes.
+#   * measure scheduler throughput: time from apply to all-Running.
+#
+# The container is registry.k8s.io/pause — KWOK never runs it, so the image is
+# irrelevant; the RESOURCE REQUEST is what drives scheduling.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kwok-scale
+  labels:
+    app.kubernetes.io/part-of: tx04v2-lab
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-fleet-load
+  namespace: kwok-scale
+  labels:
+    app: gpu-fleet-load
+spec:
+  replicas: 400
+  selector:
+    matchLabels:
+      app: gpu-fleet-load
+  template:
+    metadata:
+      labels:
+        app: gpu-fleet-load
+    spec:
+      # Only land on fake nodes...
+      nodeSelector:
+        type: kwok
+      # ...and tolerate their NoSchedule taint.
+      tolerations:
+        - key: kwok.x-k8s.io/node
+          operator: Equal
+          value: fake
+          effect: NoSchedule
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+              nvidia.com/gpu: "1"
+            limits:
+              nvidia.com/gpu: "1"

@@ -1,0 +1,79 @@
+# ---------------------------------------------------------------------------
+# gang-training-job.yaml — a distributed-training Volcano Job with GANG (all-or-
+# nothing) scheduling.
+#
+# The job has 1 launcher + 3 workers = 4 pods, each asking for 1 GPU.
+#   spec.minAvailable: 4  -> Volcano creates a PodGroup with minMember=4 and only
+#   binds ANY pod once it can place ALL 4 together. If fewer than 4 GPUs are free,
+#   NOTHING starts (no partial placement holding idle GPUs).
+#
+# WHY: synchronous data-parallel training does an AllReduce every step; if only
+# some workers start, they block on the collective and the started pods burn GPU
+# time doing nothing. Gang scheduling makes the job atomic.
+#
+# Try it:
+#   kubectl apply -f platform/20-scheduling/gang-training-job.yaml
+#   kubectl get podgroups,pods -n ml-jobs -w
+#   # now shrink capacity (kubectl scale/patch the queue capability to 2) and
+#   # re-apply: the whole job stays Pending as a group instead of half-starting.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ml-jobs
+  labels:
+    app.kubernetes.io/part-of: tx04v2-lab
+---
+apiVersion: batch.volcano.sh/v1alpha1
+kind: Job
+metadata:
+  name: gang-train
+  namespace: ml-jobs
+  labels:
+    app.kubernetes.io/part-of: tx04v2-lab
+    tx04v2.module: 20-scheduling
+spec:
+  minAvailable: 4          # gang size: all 4 pods or none
+  schedulerName: volcano   # opt in to the Volcano scheduler
+  queue: ml                # charge this job to the "ml" queue
+  plugins:
+    env: []                # inject VC_* rank/index env into each pod
+    svc: []                # create a headless Service + rank hostnames (for AllReduce rendezvous)
+  policies:
+    - event: PodEvicted
+      action: RestartJob   # if a pod is evicted, restart the whole gang (training is stateful)
+  tasks:
+    - name: launcher
+      replicas: 1
+      template:
+        metadata:
+          labels:
+            role: launcher
+        spec:
+          restartPolicy: OnFailure
+          nodeSelector:
+            nvidia.com/gpu.present: "true"
+          containers:
+            - name: launcher
+              image: busybox:1.37
+              command: ["sh", "-c", "echo 'rank=0 launcher up; would start torchrun/mpirun here'; sleep 600"]
+              resources:
+                limits:
+                  nvidia.com/gpu: "1"
+    - name: worker
+      replicas: 3
+      template:
+        metadata:
+          labels:
+            role: worker
+        spec:
+          restartPolicy: OnFailure
+          nodeSelector:
+            nvidia.com/gpu.present: "true"
+          containers:
+            - name: worker
+              image: busybox:1.37
+              command: ["sh", "-c", "echo \"worker ${VC_TASK_INDEX:-?} up; waiting for AllReduce\"; sleep 600"]
+              resources:
+                limits:
+                  nvidia.com/gpu: "1"

@@ -1,0 +1,89 @@
+# ---------------------------------------------------------------------------
+# iperf3.yaml — measure pod-to-pod (East-West) throughput.
+#
+# Distributed training is bottlenecked by East-West bandwidth: every step's
+# AllReduce moves the full gradient tensor between workers. Before blaming the
+# GPUs, you measure the fabric. This runs an iperf3 server and a client Job that
+# reports Gbit/s between two pods (ideally pin them to different nodes to measure
+# the real inter-node path, not loopback).
+#
+#   kubectl apply -f platform/40-networking/iperf3.yaml
+#   kubectl logs job/iperf3-client -f
+#   # compare CNIs: run once on the default (kindnet) cluster and once on Cilium.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: netbench
+  labels:
+    app.kubernetes.io/part-of: tx04v2-lab
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iperf3-server
+  namespace: netbench
+  labels:
+    app: iperf3-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iperf3-server
+  template:
+    metadata:
+      labels:
+        app: iperf3-server
+    spec:
+      containers:
+        - name: iperf3
+          image: networkstatic/iperf3:latest
+          args: ["-s"]
+          ports:
+            - containerPort: 5201
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { cpu: "1", memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iperf3-server
+  namespace: netbench
+spec:
+  selector:
+    app: iperf3-server
+  ports:
+    - port: 5201
+      targetPort: 5201
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: iperf3-client
+  namespace: netbench
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: iperf3-client
+    spec:
+      restartPolicy: Never
+      # Prefer a different node than the server to measure the inter-node path.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: iperf3-server
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: iperf3
+          image: networkstatic/iperf3:latest
+          args: ["-c", "iperf3-server.netbench.svc.cluster.local", "-t", "10", "-P", "4"]
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { cpu: "1", memory: 128Mi }

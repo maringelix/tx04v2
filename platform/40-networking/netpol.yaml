@@ -1,0 +1,79 @@
+# ---------------------------------------------------------------------------
+# netpol.yaml — least-privilege isolation for the ml-jobs namespace.
+#
+# Two layers:
+#   1) A vanilla Kubernetes NetworkPolicy: default-deny ingress+egress, then
+#      allow DNS (to kube-system) and intra-namespace traffic (workers talking to
+#      each other for AllReduce). Portable across any CNI that enforces policy.
+#   2) A CiliumNetworkPolicy showing L7 (HTTP-aware) enforcement — something plain
+#      NetworkPolicy cannot do. This is an eBPF/Cilium superpower: allow only
+#      GET /metrics, deny everything else, identity-based (not IP-based).
+#
+# NetworkPolicy is DENY-by-default ONLY for the traffic directions it selects, and
+# only once at least one policy selects a pod. That subtlety trips people up.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ml-jobs-default-deny
+  namespace: ml-jobs
+spec:
+  podSelector: {}          # all pods in ml-jobs
+  policyTypes:
+    - Ingress
+    - Egress
+  # No ingress/egress rules below => deny all (except what the next policy allows).
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ml-jobs-allow-dns-and-intra
+  namespace: ml-jobs
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # allow pods in this namespace to talk to each other (AllReduce mesh)
+    - from:
+        - podSelector: {}
+  egress:
+    # allow intra-namespace egress
+    - to:
+        - podSelector: {}
+    # allow DNS to CoreDNS in kube-system (UDP+TCP 53) — without this, a
+    # default-deny egress policy silently breaks name resolution: the #1
+    # "why can't my pod resolve anything" incident after adding NetworkPolicy.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Cilium L7 example: only GET /metrics is allowed to reach these pods. Requires
+# the Cilium cluster variant. Identity-based (endpoint labels), not IP-based.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-metrics-only
+  namespace: serving
+spec:
+  endpointSelector:
+    matchLabels:
+      app: mock-llm
+  ingress:
+    - fromEndpoints:
+        - {}                # any endpoint in the cluster (tighten in prod)
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+          rules:
+            http:
+              - method: "GET"
+                path: "/metrics"

@@ -1,0 +1,69 @@
+# Kubernetes / kubeconfig
+kubeconfig
+*.kubeconfig
+kube.conf
+.kube/
+
+# Helm
+charts/*.tgz
+*.tgz
+**/charts/
+**/Chart.lock
+
+# Rendered / generated manifests
+rendered/
+*.rendered.yaml
+dist/
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+secrets/
+*.secret
+*.pem
+*.key
+!**/*.example.key
+
+# Logs / debug bundles
+*.log
+logs/
+crash.log
+debug-bundle*/
+sos-report*/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Tooling caches
+.state/
+**/generated-contract.json
+.ci-generated/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.example.tfvars
+.venv/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+node_modules/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini

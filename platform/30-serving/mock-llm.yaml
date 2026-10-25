@@ -1,0 +1,150 @@
+# ---------------------------------------------------------------------------
+# mock-llm.yaml — a lightweight, RUNNABLE stand-in for an LLM inference server.
+#
+# Real vLLM + a model needs many GB of RAM/VRAM. To keep the AUTOSCALING lesson
+# runnable on an 8 GB laptop, this is a ~50-line stdlib-Python server (stock
+# python:3.12-slim, no custom image/build) that:
+#   * POST/GET /generate  -> sleeps GEN_DELAY to simulate inference, so concurrent
+#                            callers pile up as "in-flight" work.
+#   * GET /metrics        -> Prometheus text with  llm_requests_inflight (gauge)
+#                            and llm_requests_total (counter).
+#   * GET /healthz        -> readiness.
+# The in-flight gauge is the autoscaling signal (see hpa.yaml): queue depth /
+# concurrency is a far better scale trigger for inference than CPU%.
+#
+# The real thing exports vllm:num_requests_running / vllm:num_requests_waiting —
+# same idea, real numbers (see real-vllm/).
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: serving
+  labels:
+    app.kubernetes.io/part-of: tx04v2-lab
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mock-llm-src
+  namespace: serving
+data:
+  server.py: |
+    import http.server, socketserver, threading, time, os
+    inflight = 0
+    total = 0
+    lock = threading.Lock()
+    DELAY = float(os.environ.get("GEN_DELAY", "0.25"))  # simulated inference latency
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, code, body, ctype="text/plain; version=0.0.4"):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            self._route()
+
+        def do_POST(self):
+            self._route()
+
+        def _route(self):
+            global inflight, total
+            if self.path.startswith("/metrics"):
+                with lock:
+                    inf, tot = inflight, total
+                body = (
+                    "# HELP llm_requests_inflight In-flight inference requests\n"
+                    "# TYPE llm_requests_inflight gauge\n"
+                    f"llm_requests_inflight {inf}\n"
+                    "# HELP llm_requests_total Total inference requests\n"
+                    "# TYPE llm_requests_total counter\n"
+                    f"llm_requests_total {tot}\n"
+                ).encode()
+                self._send(200, body)
+            elif self.path.startswith("/healthz"):
+                self._send(200, b"ok")
+            else:  # /generate (or anything) -> simulate an inference request
+                with lock:
+                    inflight += 1
+                    total += 1
+                try:
+                    time.sleep(DELAY)
+                    self._send(200, b'{"text":"hello from mock-llm"}', "application/json")
+                finally:
+                    with lock:
+                        inflight -= 1
+
+    class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+        daemon_threads = True
+
+    if __name__ == "__main__":
+        Server(("0.0.0.0", 8080), H).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-llm
+  namespace: serving
+  labels:
+    app: mock-llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-llm
+  template:
+    metadata:
+      labels:
+        app: mock-llm
+    spec:
+      containers:
+        - name: server
+          image: python:3.12-slim
+          command: ["python", "/app/server.py"]
+          env:
+            - name: GEN_DELAY
+              value: "0.25"
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: "100m"
+              memory: 64Mi
+            limits:
+              cpu: "500m"
+              memory: 128Mi
+          volumeMounts:
+            - name: src
+              mountPath: /app
+              readOnly: true
+      volumes:
+        - name: src
+          configMap:
+            name: mock-llm-src
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-llm
+  namespace: serving
+  labels:
+    app: mock-llm
+spec:
+  selector:
+    app: mock-llm
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

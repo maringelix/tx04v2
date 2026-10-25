@@ -1,0 +1,41 @@
+# ===========================================================================
+# nvidia-device-plugin-timeslicing.yaml  —  REAL-HARDWARE REFERENCE (do NOT
+# apply in the CPU-only lab; there is no NVIDIA driver here).
+#
+# On a real GPU node this ConfigMap makes the NVIDIA k8s-device-plugin advertise
+# EACH physical GPU as `replicas` schedulable slices. Example below: 1 physical
+# GPU -> 4 x nvidia.com/gpu. Time-slicing is COOPERATIVE context-switching on the
+# GPU: it multiplexes compute but does NOT partition VRAM and gives NO fault or
+# performance isolation between the pods sharing a GPU.
+#
+# Wire it up either via the GPU Operator ClusterPolicy
+#   (devicePlugin.config.name=time-slicing-config, default=any)
+# or by passing --config-file to the device plugin DaemonSet.
+# ===========================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: time-slicing-config
+  namespace: gpu-operator
+data:
+  any: |-
+    version: v1
+    flags:
+      migStrategy: none
+    sharing:
+      timeSlicing:
+        # renameByDefault: false keeps the resource name nvidia.com/gpu; set true
+        # to expose nvidia.com/gpu.shared and keep whole GPUs distinguishable.
+        renameByDefault: false
+        failRequestsGreaterThanOne: true
+        resources:
+          - name: nvidia.com/gpu
+            replicas: 4
+---
+# For comparison (documentation only): MIG (Multi-Instance GPU, A100/H100+)
+# HARD-partitions a GPU into isolated instances with dedicated VRAM + SM slices.
+# Enabled per-node via a label the GPU Operator watches, e.g.:
+#   kubectl label node <n> nvidia.com/mig.config=all-1g.5gb --overwrite
+# Sharing options ranked by isolation:  MIG (hardware) > MPS (process) >
+# time-slicing (none). Choose MIG for multi-tenant/VRAM-bounded inference,
+# time-slicing for bursty dev/CI, MPS for cooperative same-user workloads.

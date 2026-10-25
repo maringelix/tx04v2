@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------------------
+# hpa.yaml — autoscale mock-llm on IN-FLIGHT REQUESTS (a custom metric).
+#
+# autoscaling/v2 lets the HPA read metrics beyond CPU/memory. Here we scale on
+# the Pods metric  llm_requests_inflight  (averaged per pod): when concurrency
+# per replica exceeds the target, add pods. Queue depth / concurrency is the
+# right autoscale signal for inference — CPU% lags and is noisy, and for a real
+# GPU server CPU is nearly idle while the GPU is saturated.
+#
+# REQUIRES prometheus-adapter to publish llm_requests_inflight into the
+# custom.metrics.k8s.io API (see prometheus-adapter-values.yaml). Verify with:
+#   kubectl get --raw \
+#     "/apis/custom.metrics.k8s.io/v1beta1/namespaces/serving/pods/*/llm_requests_inflight" | jq
+#
+# NO prometheus-adapter yet? Use the CPU fallback (works with only metrics-server):
+#   kubectl -n serving autoscale deploy/mock-llm --cpu-percent=50 --min=1 --max=8
+# ---------------------------------------------------------------------------
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mock-llm
+  namespace: serving
+  labels:
+    app: mock-llm
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mock-llm
+  minReplicas: 1
+  maxReplicas: 8
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: llm_requests_inflight
+        target:
+          type: AverageValue
+          averageValue: "5"   # scale so each pod handles ~5 concurrent requests
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0     # react fast to load spikes
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 120   # scale down slowly to avoid flapping
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60

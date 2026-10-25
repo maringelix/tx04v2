@@ -1,0 +1,46 @@
+# ---------------------------------------------------------------------------
+# prepuller-daemonset.yaml — warm the image cache on every node.
+#
+# The durable fix for "pods take forever / ImagePullBackOff on cold nodes" is to
+# make the heavy image already present before the workload lands. This DaemonSet's
+# initContainer pulls the target image on every node; the tiny main container
+# just idles. Once it's Running, the layers are in each node's containerd cache
+# and real pods start instantly.
+#
+# In production this is one of several layers (see README): also SOCI/eStargz lazy
+# pulling, a pull-through registry mirror, and separating model weights from the
+# image. Swap the image below for your real heavy image.
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: image-prepuller
+  namespace: scenario-a
+  labels:
+    tx04v2.scenario: a-image-storage
+spec:
+  selector:
+    matchLabels:
+      app: image-prepuller
+  template:
+    metadata:
+      labels:
+        app: image-prepuller
+    spec:
+      tolerations:
+        - operator: Exists
+      initContainers:
+        # Pull the heavy image here. Using a stand-in; replace with your model image.
+        - name: prepull
+          image: busybox:1.37
+          command: ["sh", "-c", "echo 'image now cached on this node'"]
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 20m
+              memory: 32Mi

@@ -1,0 +1,118 @@
+# ---------------------------------------------------------------------------
+# grafana-dashboard-gpu.yaml — a GPU/DCGM Grafana dashboard, auto-imported.
+#
+# The kube-prometheus-stack Grafana sidecar watches for ConfigMaps labeled
+#   grafana_dashboard: "1"
+# and loads their JSON as dashboards. Panels use a "datasource" template var so
+# they bind to whatever the default Prometheus datasource is.
+#
+# The panels are the ones you actually stare at when triaging GPU workloads:
+# utilization, VRAM (framebuffer), tensor-core activity, power, temperature.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gpu-dcgm-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/part-of: tx04v2-lab
+data:
+  gpu-dcgm.json: |
+    {
+      "uid": "tx04v2-gpu-dcgm",
+      "title": "tx04v2 — GPU / DCGM",
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": true,
+      "time": { "from": "now-30m", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {},
+            "hide": 0
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "GPU Utilization (%)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "fieldConfig": { "defaults": { "unit": "percent", "max": 100 }, "overrides": [] },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "DCGM_FI_DEV_GPU_UTIL",
+              "legendFormat": "gpu {{gpu}} @ {{Hostname}}"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "VRAM Used (MiB) — framebuffer",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "fieldConfig": { "defaults": { "unit": "decmbytes" }, "overrides": [] },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "DCGM_FI_DEV_FB_USED",
+              "legendFormat": "used gpu {{gpu}}"
+            },
+            {
+              "refId": "B",
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "DCGM_FI_DEV_FB_FREE",
+              "legendFormat": "free gpu {{gpu}}"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Tensor Core Activity (fraction)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1 }, "overrides": [] },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE",
+              "legendFormat": "tensor active gpu {{gpu}}"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Power (W) & Temperature (C)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "fieldConfig": { "defaults": {}, "overrides": [] },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "DCGM_FI_DEV_POWER_USAGE",
+              "legendFormat": "power gpu {{gpu}}"
+            },
+            {
+              "refId": "B",
+              "datasource": { "type": "prometheus", "uid": "${datasource}" },
+              "expr": "DCGM_FI_DEV_GPU_TEMP",
+              "legendFormat": "temp gpu {{gpu}}"
+            }
+          ]
+        }
+      ]
+    }

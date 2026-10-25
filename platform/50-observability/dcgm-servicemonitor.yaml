@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# dcgm-servicemonitor.yaml — scrape the (fake) DCGM exporter's GPU telemetry.
+#
+# The fake-gpu-operator runs a dcgm-exporter in ns gpu-operator that emits the
+# same DCGM_FI_DEV_* series a real one would. This ServiceMonitor tells the
+# Prometheus Operator to scrape it.
+#
+# IMPORTANT — two things must be right or you'll get no metrics:
+#   1) label  release: kube-prom  -> so the operator selects this SM at all.
+#   2) the spec.selector below must match the DCGM exporter Service's LABELS, and
+#      spec.endpoints[].port must match its port NAME. These vary by chart
+#      version, so VERIFY and reconcile:
+#         kubectl -n gpu-operator get svc --show-labels
+#         kubectl -n gpu-operator get svc <name> -o jsonpath='{.spec.ports}'
+#
+# Reconciled against fake-gpu-operator 0.1.0 on 2026-08-06. The Service is
+# nvidia-dcgm-exporter, its label is app=nvidia-dcgm-exporter (matches) and its
+# port is named "gpu-metrics" — NOT "metrics". The port name was the mismatch:
+# the selector matched, so the ServiceMonitor looked healthy, but Prometheus
+# generated no target at all and DCGM_FI_DEV_* stayed empty. Symptom to watch
+# for: an empty GPU dashboard while the exporter itself serves metrics fine.
+#
+# There is a second exporter Service for the KWOK fake nodes,
+# nvidia-dcgm-exporter-kwok (label app=nvidia-dcgm-exporter-kwok), which this
+# selector deliberately does not match — KWOK nodes are opt-in via ./lab.sh kwok.
+# ---------------------------------------------------------------------------
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dcgm-exporter
+  namespace: monitoring
+  labels:
+    release: kube-prom
+spec:
+  namespaceSelector:
+    matchNames:
+      - gpu-operator
+  selector:
+    matchLabels:
+      # Verified against the live Service; see the note above before changing.
+      app: nvidia-dcgm-exporter
+  endpoints:
+    - port: gpu-metrics   # the Service's port NAME, verified — not "metrics"
+      path: /metrics
+      interval: 15s

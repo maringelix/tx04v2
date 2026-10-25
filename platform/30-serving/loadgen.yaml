@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# loadgen.yaml — concurrent load to drive the in-flight metric up and trigger
+# the HPA. Each replica loops hitting /generate; more replicas = more concurrency
+# = higher llm_requests_inflight per mock-llm pod.
+#
+#   kubectl apply -f platform/30-serving/loadgen.yaml
+#   kubectl -n serving get hpa mock-llm -w         # watch REPLICAS climb
+#   kubectl -n serving scale deploy/loadgen --replicas=40   # push harder
+#   kubectl -n serving delete deploy/loadgen       # stop; watch it scale back down
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadgen
+  namespace: serving
+  labels:
+    app: loadgen
+spec:
+  replicas: 20
+  selector:
+    matchLabels:
+      app: loadgen
+  template:
+    metadata:
+      labels:
+        app: loadgen
+    spec:
+      containers:
+        - name: hammer
+          image: busybox:1.37
+          # Tight loop of blocking requests. Each replica keeps ~1 request
+          # in-flight against the Service (round-robined across mock-llm pods).
+          command:
+            - sh
+            - -c
+            - "while true; do wget -q -O /dev/null http://mock-llm.serving.svc.cluster.local/generate || true; done"
+          resources:
+            requests:
+              cpu: "10m"
+              memory: 16Mi
+            limits:
+              cpu: "50m"
+              memory: 32Mi

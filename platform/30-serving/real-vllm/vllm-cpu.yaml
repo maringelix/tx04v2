@@ -1,0 +1,72 @@
+# ===========================================================================
+# vllm-cpu.yaml — REAL vLLM on CPU (REFERENCE / optional; heavy).
+#
+# This is what the mock replaces. vLLM serves an OpenAI-compatible API and, on a
+# real GPU, uses PagedAttention + continuous batching + a KV-cache to hit high
+# throughput. CPU mode is SLOW and needs a CPU-enabled vLLM image; a tiny model
+# (facebook/opt-125m, ~250 MB) keeps it under a few GB of RAM. Expect it to be
+# far heavier than the mock — run only if you have RAM to spare.
+#
+# Real autoscaling signals to wire into an HPA/KEDA instead of CPU:
+#   vllm:num_requests_running   (like our llm_requests_inflight)
+#   vllm:num_requests_waiting   (queue depth -> scale-up trigger)
+# vLLM exposes /metrics in Prometheus format out of the box.
+# ===========================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: serving
+  labels:
+    app: vllm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm
+  template:
+    metadata:
+      labels:
+        app: vllm
+    spec:
+      containers:
+        - name: vllm
+          # NOTE: the default vllm/vllm-openai image targets CUDA. For CPU you
+          # need a CPU-built image (see vLLM docs "CPU installation"); pin it here.
+          image: vllm/vllm-openai:latest
+          args:
+            - "--model=facebook/opt-125m"
+            - "--dtype=float32"
+            - "--max-model-len=2048"
+            - "--device=cpu"
+          ports:
+            - name: http
+              containerPort: 8000
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 6Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm
+  namespace: serving
+  labels:
+    app: vllm
+spec:
+  selector:
+    app: vllm
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

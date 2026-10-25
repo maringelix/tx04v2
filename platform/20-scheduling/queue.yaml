@@ -1,0 +1,22 @@
+# ---------------------------------------------------------------------------
+# queue.yaml — a Volcano Queue for ML jobs.
+#
+# Queues are Volcano's unit of multi-tenant fairness/capacity (think: teams or
+# priority tiers sharing one GPU fleet). The scheduler's `proportion`/`drf`
+# plugins divide cluster resources across queues by `weight`, and `capability`
+# caps a queue's hard ceiling. Queues are CLUSTER-SCOPED.
+# ---------------------------------------------------------------------------
+apiVersion: scheduling.volcano.sh/v1beta1
+kind: Queue
+metadata:
+  name: ml
+  labels:
+    app.kubernetes.io/part-of: tx04v2-lab
+spec:
+  # Relative share vs other queues (the default "default" queue has weight 1).
+  weight: 4
+  # Allow this queue to reclaim resources lent to others when it needs them.
+  reclaimable: true
+  # Hard ceiling: this queue may never hold more than 8 GPUs at once.
+  capability:
+    nvidia.com/gpu: "8"
