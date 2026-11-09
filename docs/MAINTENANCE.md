@@ -138,3 +138,13 @@ commit does not remove earlier versions.
 The [three scenario runbooks](../README.md#breakfix-scenarios) contain targeted
 recovery procedures. A successful static validation or one smoke test is not
 evidence that every scenario, optional hardware path or CNI combination works.
+
+## Dependency updates
+
+Dependabot opens weekly pull requests for the GitHub Actions used by the workflows
+(`.github/dependabot.yml`). Merge one only after the four hosted checks pass for its
+exact head commit, and keep the pin format `<40-character commit SHA> # vX.Y.Z`.
+
+| Date | Change | Evidence |
+|---|---|---|
+| 2026-11-09 | `actions/setup-python` 7.0.0 → 7.1.0 | [#1](https://github.com/maringelix/tx04v2/pull/1), squash commit `be62529`; Lab CI green on the pull request and on `main` |
