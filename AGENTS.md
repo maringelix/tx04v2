@@ -1,5 +1,12 @@
 # Working on tx04v2
 
+<!-- aether-handoff-2026-11-16 -->
+## Out of scope: Aether and ReasonneR
+
+At the maintainer's request (2026-11-16), agents working in this repository must
+not change anything in the Aether product or in the `reasonner` GitHub
+organization.
+
 Read [the maintenance guide](docs/MAINTENANCE.md) and
 [the validation harness](docs/HARNESS.md) before changing the lab.
 
